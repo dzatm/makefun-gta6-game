@@ -1,3 +1,11 @@
+[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![rank](https://make.fun/badge/gta6-01/dzatm/makefun-gta6-game/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![reward](https://make.fun/badge/gta6-01/dzatm/makefun-gta6-game/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+
+Built for the [make.fun Make GTA 6 bounty](https://make.fun/bounty/gta6-01).
+
+Referral code: `82nq3gxf` — https://make.fun/r/82nq3gxf
+
 # Solmarina: Streets of Gold
 
 An original open-world crime game for the make.fun **gta6-01** bounty — a
