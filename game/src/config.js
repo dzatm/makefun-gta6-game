@@ -1,161 +1,68 @@
-// Solmarina: Streets of Gold — every tuning number and colour in one place.
-// The playfield is a fixed 1280x720 logical area; the renderer scales it to the
-// window, so no rule below depends on the screen size. The world itself is much
-// bigger (WORLD_W x WORLD_H) and the camera scrolls across it.
+// Solmarina: Streets of Gold — configuration and tuning data.
+// All numbers are original tuning values for this game.
+export const WORLD = { w: 3840, h: 2880 };
 
-export const VIEW = { width: 1280, height: 720 };
-
-/** Camera zoom: the world is drawn slightly magnified so cars and people read well. */
-export const ZOOM = 1.25;
-
-/** The simulation's fixed step, in seconds: 60 updates a second whatever the display's rate. */
-export const STEP = 1 / 60;
-
-/** World size in pixels. Roads form a grid; the south strip is beach and sea. */
-export const WORLD = {
-  width: 3840,
-  height: 2880,
-  roadWidth: 132,
-  sidewalk: 26,
-  beachY: 2520,
-  seaY: 2700,
-};
-
-/** Vertical road centre-lines (x) and horizontal road centre-lines (y). */
-export const ROADS_X = [320, 960, 1600, 2240, 2880, 3520];
-export const ROADS_Y = [320, 880, 1440, 2000, 2440];
-
-export const PLAYER = {
-  radius: 13,
-  walkSpeed: 235,
-  runSpeed: 335,
-  health: 100,
-  armourMax: 100,
-  punchDamage: 12,
-  punchRange: 34,
-  punchCooldown: 0.32,
-};
-
-export const CAR = {
-  // Per-model tuning: top speed (px/s), acceleration, turn rate, size, colour set.
-  models: [
-    { name: 'Sardine', top: 520, accel: 420, turn: 2.9, w: 46, h: 84, colors: ['#e8b23a', '#7fb069', '#c96f4a'] },
-    { name: 'Comet', top: 640, accel: 520, turn: 3.3, w: 44, h: 80, colors: ['#d6455b', '#4a90d9', '#f2f2f2'] },
-    { name: 'Hauler', top: 470, accel: 330, turn: 2.4, w: 52, h: 108, colors: ['#8a7f8d', '#5b7a5e', '#b0893c'] },
-    { name: 'Falco GT', top: 760, accel: 640, turn: 3.6, w: 46, h: 86, colors: ['#22242c', '#c0392b', '#f5c518'] },
-    { name: 'Taxi', top: 560, accel: 460, turn: 3.1, w: 46, h: 84, colors: ['#f5c518'] },
-    { name: 'Police', top: 700, accel: 600, turn: 3.5, w: 46, h: 86, colors: ['#1c2f57'] },
-    // Model 6 is a motorcycle: narrow, very fast, sharp steering — but the
-    // rider is exposed, so crashes hurt and the bike wobbles at top speed.
-    { name: 'Corsaro 900', top: 820, accel: 780, turn: 4.4, w: 22, h: 66, colors: ['#c0392b', '#22242c', '#f5c518'], bike: true },
-  ],
-  enterRange: 70,
-  health: 100,
-  explosionDamage: 60,
-  bikeCrashDamage: 15,
-  bikeWobble: 0.35,
-};
-
-export const TRAFFIC = { count: 16, minGap: 90, cruise: 0.55 };
-export const PEDS = { count: 26, speed: 70 };
-
-export const POLICE = {
-  maxCars: 6,
-  spawnDistance: 700,
-  ramDamage: 8,
-  bustTime: 1.2,
-  decayDelay: 14,
-  starsForCar: [0, 1, 2, 3, 4, 5],
-  // A blocking patrol car aims this many seconds ahead of the player's
-  // velocity, cutting the escape route instead of tailing the player.
-  blockAhead: 1.4,
-  // How far police can spot the player (px). Fog shrinks it hard, rain a bit.
-  sightClear: 600,
-  sightRain: 500,
-  sightFog: 320,
-  // Foot cops hold a flanking position instead of charging an armed player.
-  coverRange: 300,
-  coverHold: 200,
-};
-
-/** Weather: kind, road grip, and how the sky looks. Rain makes roads slick;
- * fog cuts visibility (and police sight); clear is the baseline. */
-export const WEATHER = {
-  kinds: ['clear', 'rain', 'fog'],
-  grip: { clear: 1, rain: 0.72, fog: 0.9 },
-  labels: { clear: 'CLEAR', rain: 'RAIN · grip low', fog: 'FOG · visibility low' },
-  // Seconds between automatic weather changes (randomised in this range).
-  autoChange: [90, 150],
-  // Weighted odds when the weather rolls over on its own.
-  weights: [['clear', 0.5], ['rain', 0.3], ['fog', 0.2]],
-};
-
-/** Minimap zoom levels, toggled with N. */
-export const MINIMAP = { zoomLevels: [1, 2] };
-
-export const WEAPONS = {
-  fists: { name: 'Fists', damage: 12, rate: 0.32, range: 34, ammo: Infinity, auto: false, recoil: 0 },
-  pistol: { name: 'P9 Pistol', damage: 26, rate: 0.24, range: 520, ammo: 12, auto: false, spread: 0.05, speed: 900, recoil: 0.08 },
-  smg: { name: 'Stinger SMG', damage: 14, rate: 0.09, range: 460, ammo: 32, auto: true, spread: 0.11, speed: 1000, recoil: 0.03 },
-  shotgun: { name: 'Boomstick', damage: 16, rate: 0.7, range: 300, ammo: 6, auto: false, spread: 0.16, speed: 800, pellets: 5, recoil: 0.3 },
-  // Long-range rifle: one heavy round, a slow cycle, and a real kick.
-  rifle: { name: 'Longshot Rifle', damage: 60, rate: 0.9, range: 720, ammo: 5, auto: false, spread: 0.012, speed: 1500, recoil: 0.35 },
-};
-
-export const ECONOMY = {
-  startCash: 120,
-  missionRewards: [250, 400, 600, 800, 1100, 2000, 3000],
-  repairCost: 60,
-  repaintCost: 40,
-  pistolCost: 220,
-  smgCost: 650,
-  shotgunCost: 480,
-  rifleCost: 900,
-  ammoCost: 30,
-  foodCost: 15,
-  foodHeal: 35,
-  bribeCost: 150,
-  pedCashDrop: 12,
-  gangCashDrop: 40,
-};
-
-export const TIME = {
-  dayLength: 240, // seconds for a full day cycle
-  startHour: 9.5, // morning
-};
-
-export const SAVE_KEY = 'solmarina.save.v1';
-export const BEST_KEY = 'solmarina.best.v1';
+export const SEED = 20261123;
 
 export const PALETTE = {
-  sky: '#87b7d9',
-  grass: '#7fae62',
-  grassDark: '#6f9e55',
-  sand: '#e3cd96',
-  sea: '#2f7fa8',
-  seaDeep: '#256b8f',
-  road: '#3a3d44',
-  roadLine: '#e8d44d',
-  sidewalk: '#9aa0a3',
-  curb: '#6e7377',
-  buildingRoof: ['#b5543f', '#4a6b8a', '#7a5c8a', '#3f7a5e', '#8a6a3f', '#5e6b7a'],
-  buildingWall: '#c9c2b4',
-  park: '#5d9b4a',
-  water: '#2f7fa8',
-  player: '#e8b23a',
-  playerShirt: '#2e86c1',
-  police: '#1c2f57',
-  policeLight: '#ff3b30',
-  gang: '#8e44ad',
-  hud: '#11151c',
-  hudPanel: 'rgba(12,16,22,0.78)',
-  text: '#f4f6f8',
-  muted: '#9aa5b1',
-  gold: '#f5c518',
-  red: '#e5534b',
-  green: '#58b368',
-  blue: '#4a90d9',
+  grass: '#3f7d44',
+  grassDark: '#356b3a',
+  park: '#4c8a3f',
+  sand: '#e0c184',
+  water: '#1f6f8b',
+  waterDeep: '#155a75',
+  road: '#3a3a40',
+  roadLine: '#e8c84a',
+  sidewalk: '#8d8d94',
+  buildingRoof: '#6b4a5a',
+  buildingRoof2: '#4a5a6b',
+  buildingRoof3: '#7a6a4a',
+  harbour: '#5a4632',
+  pier: '#8a6a42',
+  lighthouse: '#e8e4d8',
 };
 
-export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
-export const FONT_DISPLAY = '"Trebuchet MS", "Segoe UI", system-ui, sans-serif';
+export const WEATHER_KINDS = {
+  clear: { label: 'Clear', grip: 1.0, sight: 620, fog: 0 },
+  rain: { label: 'Rain', grip: 0.72, sight: 500, fog: 0.12 },
+  fog: { label: 'Fog', grip: 0.9, sight: 320, fog: 0.55 },
+};
+export const WEATHER_ORDER = ['clear', 'rain', 'fog'];
+
+export const WEAPONS = {
+  fists: { name: 'Fists', slot: 1, damage: 12, rate: 0.45, range: 42, spread: 0, speed: 0, auto: false, price: 0, ammo: Infinity },
+  pistol: { name: 'Pistol', slot: 2, damage: 22, rate: 0.32, range: 420, spread: 0.05, speed: 900, auto: false, price: 250, ammo: 120 },
+  smg: { name: 'SMG', slot: 3, damage: 13, rate: 0.09, range: 380, spread: 0.11, speed: 1000, auto: true, price: 550, ammo: 240 },
+  shotgun: { name: 'Shotgun', slot: 4, damage: 16, rate: 0.8, range: 260, spread: 0.22, speed: 760, auto: false, price: 700, ammo: 48, pellets: 6 },
+  rifle: { name: 'Rifle', slot: 5, damage: 48, rate: 0.9, range: 720, spread: 0.01, speed: 1600, auto: false, price: 900, ammo: 60 },
+};
+export const WEAPON_ORDER = ['fists', 'pistol', 'smg', 'shotgun', 'rifle'];
+
+export const CAR_MODELS = [
+  { name: 'Pinto', top: 380, accel: 260, grip: 0.9, color: '#c94f42', price: 0, size: 1 },
+  { name: 'Sedan', top: 430, accel: 300, grip: 1.0, color: '#4a7ac9', price: 0, size: 1 },
+  { name: 'Coupe', top: 500, accel: 360, grip: 1.05, color: '#e8c84a', price: 0, size: 1 },
+  { name: 'Van', top: 340, accel: 220, grip: 0.85, color: '#8d8d94', price: 0, size: 1.2 },
+  { name: 'Muscle', top: 560, accel: 420, grip: 1.0, color: '#7a3fa0', price: 0, size: 1 },
+  { name: 'Interceptor', top: 620, accel: 480, grip: 1.1, color: '#22252c', price: 0, size: 1, police: true },
+];
+export const BIKE = { name: 'Corsaro 900', top: 820, accel: 560, grip: 0.95, color: '#d42a6a', price: 0, bike: true };
+
+export const PRICES = {
+  repair: 120,
+  repaint: 80,
+  armour: 200,
+  pistolAmmo: 60,
+  smgAmmo: 90,
+  shotgunAmmo: 70,
+  rifleAmmo: 110,
+  food: 25,
+};
+
+export const MISSION_REWARDS = [150, 220, 300, 380, 450, 600, 750];
+
+export const WANTED_DECAY_SECONDS = 14;
+export const POLICE_SIGHT = { clear: 600, rain: 500, fog: 320 };
+
+export const SAVE_KEY = 'solmarina-save-v2';
+export const BINDINGS_KEY = 'solmarina-bindings-v1';

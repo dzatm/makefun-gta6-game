@@ -1,111 +1,123 @@
-// Keyboard and mouse input. Keys are tracked as a set of codes; the mouse is
-// tracked in logical canvas coordinates so aiming works at any window size.
-//
-// Actions are rebound through a bindings table (persisted in localStorage):
-// the game asks for an action ('pause', 'hud', 'photo', 'minimap',
-// 'weather', 'mute') instead of a hard-coded key, so the player can remap
-// them without touching the code. Defaults match the controls screen.
-
-const BINDINGS_KEY = 'solmarina.bindings.v1';
+// Rebindable keyboard + mouse input. Presses are consumed on read so
+// one physical press fires exactly once, even on frames that run
+// several fixed simulation steps.
+import { BINDINGS_KEY } from './config.js';
 
 export const DEFAULT_BINDINGS = {
-  pause: 'Escape',
-  hud: 'Tab',
-  photo: 'KeyP',
-  minimap: 'KeyN',
-  weather: 'KeyR',
-  mute: 'KeyM',
+  up: ['KeyW', 'ArrowUp'],
+  down: ['KeyS', 'ArrowDown'],
+  left: ['KeyA', 'ArrowLeft'],
+  right: ['KeyD', 'ArrowRight'],
+  sprint: ['ShiftLeft', 'ShiftRight'],
+  enter: ['KeyE'],
+  punch: ['Space'],
+  weapon1: ['Digit1'],
+  weapon2: ['Digit2'],
+  weapon3: ['Digit3'],
+  weapon4: ['Digit4'],
+  weapon5: ['Digit5'],
+  shopRepair: ['KeyG'],
+  shopAmmo: ['KeyH'],
+  shopEat: ['KeyF'],
+  pause: ['Escape'],
+  mute: ['KeyM'],
+  hideHud: ['Tab'],
+  photo: ['KeyP'],
+  minimap: ['KeyN'],
+  weather: ['KeyR'],
+  horn: ['KeyH'],
 };
 
-function loadBindings() {
-  try {
-    const raw = window.localStorage.getItem(BINDINGS_KEY);
-    if (!raw) return { ...DEFAULT_BINDINGS };
-    const data = JSON.parse(raw);
-    return { ...DEFAULT_BINDINGS, ...data };
-  } catch {
-    return { ...DEFAULT_BINDINGS };
+export class Input {
+  constructor() {
+    this.bindings = this.loadBindings();
+    this.down = {}; // code -> bool
+    this.pressed = {}; // action -> timestamp ms, consumed on read
+    this.pressedAt = {};
+    this.up = false; this.downKey = false; this.left = false; this.right = false;
+    this.mouse = { x: 0, y: 0, down: false, clicked: false };
+    this._listeners = [];
   }
-}
 
-export const bindings = loadBindings();
+  loadBindings() {
+    try {
+      const raw = localStorage.getItem(BINDINGS_KEY);
+      if (raw) return { ...DEFAULT_BINDINGS, ...JSON.parse(raw) };
+    } catch (e) { /* ignore */ }
+    return JSON.parse(JSON.stringify(DEFAULT_BINDINGS));
+  }
 
-/** The key code currently bound to an action. */
-export function getBinding(action) {
-  return bindings[action] || DEFAULT_BINDINGS[action];
-}
+  saveBindings() {
+    try { localStorage.setItem(BINDINGS_KEY, JSON.stringify(this.bindings)); } catch (e) { /* ignore */ }
+  }
 
-/** Rebind an action to a new key code and persist it. */
-export function setBinding(action, code) {
-  if (!DEFAULT_BINDINGS[action] || typeof code !== 'string') return false;
-  bindings[action] = code;
-  try {
-    window.localStorage.setItem(BINDINGS_KEY, JSON.stringify(bindings));
-  } catch { /* storage unavailable; the binding still holds for this session */ }
-  return true;
-}
+  rebind(action, code) {
+    this.bindings[action] = [code];
+    this.saveBindings();
+  }
 
-/** Was the action's key pressed since the last frame (edge-triggered)?
- * Consumes the press, like wasPressed, so one key press fires once. */
-export function wasPressedAction(input, action) {
-  return wasPressed(input, getBinding(action));
-}
+  attach(canvas) {
+    const keydown = (e) => {
+      if (e.code === 'Tab') e.preventDefault();
+      if (e.repeat) return;
+      this.down[e.code] = true;
+      for (const [action, codes] of Object.entries(this.bindings)) {
+        if (codes.includes(e.code)) {
+          this.pressed[action] = true;
+          this.pressedAt[action] = performance.now();
+        }
+      }
+    };
+    const keyup = (e) => { this.down[e.code] = false; };
+    const mousemove = (e) => {
+      const r = canvas.getBoundingClientRect();
+      this.mouse.x = e.clientX - r.left;
+      this.mouse.y = e.clientY - r.top;
+    };
+    const mousedown = (e) => { this.mouse.down = true; this.mouse.clicked = true; };
+    const mouseup = () => { this.mouse.down = false; };
+    const blur = () => { this.down = {}; };
+    window.addEventListener('keydown', keydown);
+    window.addEventListener('keyup', keyup);
+    window.addEventListener('blur', blur);
+    canvas.addEventListener('mousemove', mousemove);
+    canvas.addEventListener('mousedown', mousedown);
+    window.addEventListener('mouseup', mouseup);
+    this._listeners.push(['keydown', keydown], ['keyup', keyup], ['blur', blur]);
+  }
 
-export function createInput(canvas) {
-  const input = {
-    keys: new Set(),
-    pressed: new Set(),
-    mouseX: 640,
-    mouseY: 360,
-    mouseDown: false,
-    mouseClicked: false,
-  };
+  isDown(action) {
+    const codes = this.bindings[action] || [];
+    return codes.some((c) => this.down[c]);
+  }
 
-  window.addEventListener('keydown', (e) => {
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab'].includes(e.code)) e.preventDefault();
-    if (!e.repeat) {
-      input.keys.add(e.code);
-      input.pressed.add(e.code);
+  // Consume-on-read: a press fires exactly once.
+  wasPressed(action) {
+    if (this.pressed[action]) {
+      this.pressed[action] = false;
+      return true;
     }
-  });
-  window.addEventListener('keyup', (e) => input.keys.delete(e.code));
-  window.addEventListener('blur', () => input.keys.clear());
+    return false;
+  }
 
-  canvas.addEventListener('mousemove', (e) => {
-    const rect = canvas.getBoundingClientRect();
-    input.mouseX = ((e.clientX - rect.left) / rect.width) * 1280;
-    input.mouseY = ((e.clientY - rect.top) / rect.height) * 720;
-  });
-  canvas.addEventListener('mousedown', (e) => {
-    if (e.button === 0) {
-      input.mouseDown = true;
-      input.mouseClicked = true;
+  // Called once per frame AFTER the simulation stepped, so presses that
+  // arrive on a frame that ran zero steps are not swallowed. Stale
+  // presses (older than 250ms and never consumed) are dropped so a
+  // key hit while paused does not fire later by surprise.
+  endFrame(stepped) {
+    if (!stepped) return;
+    const now = performance.now();
+    for (const action of Object.keys(this.pressed)) {
+      if (this.pressed[action] && now - (this.pressedAt[action] || 0) > 250) {
+        this.pressed[action] = false;
+      }
     }
-  });
-  window.addEventListener('mouseup', () => { input.mouseDown = false; });
+  }
 
-  return input;
-}
-
-export function axis(input, negative, positive) {
-  let v = 0;
-  if (input.keys.has(negative)) v -= 1;
-  if (input.keys.has(positive)) v += 1;
-  return v;
-}
-
-/** Was the key pressed since the last frame (edge-triggered)? Reading a press
- * consumes it, so a frame that runs several fixed simulation steps still
- * handles one key press exactly once (a pause key must not pause and
- * immediately unpause, a weather key must not cycle twice). */
-export function wasPressed(input, code) {
-  if (!input.pressed.has(code)) return false;
-  input.pressed.delete(code);
-  return true;
-}
-
-/** Clear the edge-triggered set at the end of each frame. */
-export function endFrame(input) {
-  input.pressed.clear();
-  input.mouseClicked = false;
+  poll() {
+    this.up = this.isDown('up');
+    this.downKey = this.isDown('down');
+    this.left = this.isDown('left');
+    this.right = this.isDown('right');
+  }
 }

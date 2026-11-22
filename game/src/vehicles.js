@@ -1,296 +1,277 @@
-// Cars: arcade physics (acceleration, steering, drift, damage, smoke) plus the
-// traffic AI that drives them along the road grid and the police AI that hunts
-// the player. A car is driven by the player, by traffic, or by the police.
-
-import { CAR, WORLD, ROADS_X, ROADS_Y, POLICE } from './config.js';
-import { clamp, angleDelta, dist, pick, gauss } from './random.js';
-import { collideBuildings, nearestRoadPoint, randomRoadPoint, onRoad } from './world.js';
+// Vehicles: spawning, driving physics, traffic AI and police AI.
+// Police coordinate: the closest unit chases, the next one cuts ahead
+// of the player's velocity to block the escape route (wanted >= 2).
+import { CAR_MODELS, BIKE, WORLD, WEATHER_KINDS } from './config.js';
+import { clamp, angleDiff, dist2, angleTo } from './random.js';
+import { circleHitsBuilding, onRoad, clampToWorld } from './world.js';
 
 let nextId = 1;
 
-/** True for the motorcycle model: narrow, fast, and the rider is exposed. */
-export function isBike(car) {
-  return !!CAR.models[car.model].bike;
-}
-
-export function makeCar(modelIndex, x, y, angle, color, driver = 'traffic') {
-  const m = CAR.models[modelIndex];
+export function makeVehicle(model, x, y, angle, driver) {
   return {
-    id: nextId,
-    kind: 'car',
-    model: modelIndex,
-    name: m.name,
+    id: nextId++,
+    model,
     x, y, angle,
     speed: 0,
-    steer: 0,
-    color,
-    driver, // 'player' | 'traffic' | 'police' | 'gang' | 'parked'
-    health: CAR.health,
-    wanted: false,
-    // traffic AI state
-    lane: 0,
-    dir: 0, // 0 = along +x/+y, 1 = -x/-y; axis: 'h' | 'v'
-    axis: 'h',
-    targetSpeed: 0,
-    wait: 0,
-    smoke: 0,
-    brake: false,
-    dead: false,
-    // Police coordination role, assigned by the game each tick: 'chase' tails
-    // the player, 'block' cuts ahead of them. Null for other drivers.
-    role: null,
-    // Motorcycle wobble clock; bikes sway a little at speed.
-    wobbleT: 0,
+    health: 100,
+    driver: driver || 'parked', // 'player' | 'traffic' | 'police' | 'parked'
+    color: model.color,
+    wobble: 0,
+    target: null,
+    role: null, // police: 'chase' | 'block'
+    stuckT: 0,
+    siren: 0,
   };
 }
 
-export function spawnTrafficCar(rng, city, minDistTo) {
-  let p;
-  let tries = 0;
-  do {
-    p = randomRoadPoint(rng);
-    tries += 1;
-  } while (tries < 20 && minDistTo && dist(p.x, p.y, minDistTo.x, minDistTo.y) < 500);
-  const model = pick(rng, [0, 0, 1, 1, 2, 3, 4, 6]);
-  const car = makeCar(model, p.x, p.y, 0, pick(rng, CAR.models[model].colors), 'traffic');
-  const rp = nearestRoadPoint(p.x, p.y);
-  car.axis = rp.axis;
-  car.dir = rng() < 0.5 ? 0 : 1;
-  car.angle = car.axis === 'h' ? (car.dir === 0 ? 0 : Math.PI) : (car.dir === 0 ? Math.PI / 2 : -Math.PI / 2);
-  car.lane = rng() < 0.5 ? -1 : 1;
-  car.targetSpeed = CAR.models[model].top * 0.45;
-  return car;
-}
-
-export function spawnParkedCar(rng, city, minDistTo) {
-  let p;
-  let tries = 0;
-  do {
-    p = randomRoadPoint(rng);
-    tries += 1;
-  } while (tries < 20 && minDistTo && dist(p.x, p.y, minDistTo.x, minDistTo.y) < 420);
-  const model = pick(rng, [0, 1, 2, 3]);
-  const car = makeCar(model, p.x, p.y, rng() < 0.5 ? 0 : Math.PI / 2, pick(rng, CAR.models[model].colors), 'parked');
-  // Parked cars sit at the road edge, not in the lane.
-  const rp = nearestRoadPoint(p.x, p.y);
-  if (rp.axis === 'h') {
-    car.y = rp.y + (rng() < 0.5 ? -1 : 1) * (WORLD.roadWidth / 2 - 14);
-    car.angle = rng() < 0.5 ? 0 : Math.PI;
-  } else {
-    car.x = rp.x + (rng() < 0.5 ? -1 : 1) * (WORLD.roadWidth / 2 - 14);
-    car.angle = rng() < 0.5 ? Math.PI / 2 : -Math.PI / 2;
-  }
-  return car;
-}
-
-/** A parked motorcycle at the road edge, ready to steal. */
-export function spawnParkedBike(rng, city, minDistTo) {
-  let p;
-  let tries = 0;
-  do {
-    p = randomRoadPoint(rng);
-    tries += 1;
-  } while (tries < 20 && minDistTo && dist(p.x, p.y, minDistTo.x, minDistTo.y) < 420);
-  const bike = makeCar(6, p.x, p.y, rng() < 0.5 ? 0 : Math.PI / 2, pick(rng, CAR.models[6].colors), 'parked');
-  const rp = nearestRoadPoint(p.x, p.y);
-  if (rp.axis === 'h') {
-    bike.y = rp.y + (rng() < 0.5 ? -1 : 1) * (WORLD.roadWidth / 2 - 14);
-    bike.angle = rng() < 0.5 ? 0 : Math.PI;
-  } else {
-    bike.x = rp.x + (rng() < 0.5 ? -1 : 1) * (WORLD.roadWidth / 2 - 14);
-    bike.angle = rng() < 0.5 ? Math.PI / 2 : -Math.PI / 2;
-  }
-  return bike;
-}
-
-/** Arcade car step. `input` is { throttle: -1..1, steer: -1..1, brake } for the player; traffic passes its own.
- * `grip` (0..1) is the weather's road grip: rain makes acceleration, turning
- * and braking all weaker, so wet roads feel slick. */
-export function stepCar(car, dt, input, city, grip = 1) {
-  const m = CAR.models[car.model];
-  const accel = input.throttle * m.accel * grip;
-  const drag = 0.6 + Math.abs(car.speed) * 0.0011;
-  car.speed += accel * dt;
-  car.speed -= car.speed * drag * dt;
-  if (input.brake) car.speed -= Math.sign(car.speed) * 900 * grip * dt;
-  car.speed = clamp(car.speed, -m.top * 0.45, m.top);
-  if (Math.abs(car.speed) < 4 && input.throttle === 0) car.speed = 0;
-
-  const steerAmount = input.steer * m.turn * (0.55 + 0.45 * grip) * clamp(Math.abs(car.speed) / 120, 0, 1);
-  car.angle += steerAmount * Math.sign(car.speed || 1) * dt * (car.speed < 0 ? -1 : 1);
-  // Motorcycles wobble: a small sinusoidal sway plus gaussian jitter that
-  // grows with speed, so a bike at full tilt needs constant correction.
-  if (isBike(car)) {
-    car.wobbleT += dt;
-    const wob = Math.sin(car.wobbleT * 9) * CAR.bikeWobble * (Math.abs(car.speed) / m.top);
-    car.angle += wob * dt * 2 + gauss(Math.random) * 0.004 * (Math.abs(car.speed) / m.top);
-  }
-
-  const nx = car.x + Math.cos(car.angle) * car.speed * dt;
-  const ny = car.y + Math.sin(car.angle) * car.speed * dt;
-  const old = { x: car.x, y: car.y };
-  car.x = nx;
-  car.y = ny;
-  const pos = { x: car.x, y: car.y };
-  const hit = collideBuildings(city, pos, Math.max(m.w, m.h) / 2 - 6);
-  car.x = pos.x;
-  car.y = pos.y;
-  if (hit) {
-    car.speed *= 0.45;
-    if (Math.abs(car.speed) > 200) car.health -= 2;
-    // A bike has no roof or crumple zone: hard crashes hurt the machine more.
-    if (isBike(car) && Math.abs(car.speed) > 200) car.health -= 4;
-    // slide along the wall instead of sticking
-    if (Math.abs(car.x - old.x) < 0.5 && Math.abs(car.y - old.y) < 0.5) {
-      car.angle += 0.4 * dt * 10;
-    }
-  }
-  car.x = clamp(car.x, 20, WORLD.width - 20);
-  car.y = clamp(car.y, 20, WORLD.height - 20);
-  if (car.health < 40) car.smoke = Math.min(1, car.smoke + dt * 0.5);
-  return hit;
-}
-
-/** Traffic AI: follow the road grid, turn at intersections, slow for cars ahead. */
-export function stepTraffic(car, dt, city, cars, player, grip = 1) {
-  const m = CAR.models[car.model];
-  if (car.wait > 0) {
-    car.wait -= dt;
-    return stepCar(car, dt, { throttle: 0, steer: 0, brake: true }, city, grip);
-  }
-  // Stay in lane: target point is the road centre offset by the lane side.
-  const rp = nearestRoadPoint(car.x, car.y);
-  const laneOff = 30 * car.lane;
-  let tx;
-  let ty;
-  if (car.axis === 'h') {
-    tx = car.x + (car.dir === 0 ? 200 : -200);
-    ty = rp.y + laneOff;
-  } else {
-    tx = rp.x - laneOff;
-    ty = car.y + (car.dir === 0 ? 200 : -200);
-  }
-  // At an intersection, sometimes turn.
-  const nearX = ROADS_X.some((rx) => Math.abs(car.x - rx) < 46);
-  const nearY = ROADS_Y.some((ry) => Math.abs(car.y - ry) < 46);
-  if (nearX && nearY && Math.random() < dt * 0.35) {
-    const turn = Math.random();
-    if (turn < 0.5) {
-      // Switch axis at this intersection.
-      if (car.axis === 'h') {
-        car.axis = 'v';
-        car.dir = Math.random() < 0.5 ? 0 : 1;
-      } else {
-        car.axis = 'h';
-        car.dir = Math.random() < 0.5 ? 0 : 1;
-      }
+export function spawnParkedCars(G) {
+  for (const s of G.world.carSpawns) {
+    if (s.bike) {
+      G.vehicles.push(makeVehicle(BIKE, s.x, s.y, s.angle, 'parked'));
     } else {
-      car.dir = 1 - car.dir; // U-turn is rare; keep it simple: reverse direction
-      car.dir = 1 - car.dir;
+      const model = CAR_MODELS[Math.floor(G.rng() * (CAR_MODELS.length - 1))];
+      G.vehicles.push(makeVehicle(model, s.x, s.y, s.angle, 'parked'));
     }
-  }
-  const wantAngle = Math.atan2(ty - car.y, tx - car.x);
-  const dAngle = angleDelta(car.angle, wantAngle);
-  const steer = clamp(dAngle * 2.2, -1, 1);
-  // Slow down if a car is close ahead.
-  let ahead = false;
-  for (const other of cars) {
-    if (other === car || other.dead) continue;
-    const d = dist(car.x, car.y, other.x, other.y);
-    if (d < 110) {
-      const a = Math.atan2(other.y - car.y, other.x - car.x);
-      if (Math.abs(angleDelta(car.angle, a)) < 0.6) { ahead = true; break; }
-    }
-  }
-  if (player && player.inCar === car) ahead = false;
-  const throttle = ahead ? 0 : 1;
-  stepCar(car, dt, { throttle, steer, brake: ahead }, city, grip);
-  // Keep traffic on the road: if it drifted off, steer back.
-  if (!onRoad(car.x, car.y)) {
-    const rp2 = nearestRoadPoint(car.x, car.y);
-    car.angle += angleDelta(car.angle, Math.atan2(rp2.y - car.y, rp2.x - car.x)) * dt * 2;
   }
 }
 
-/** Police AI: chase the player's car or the player on foot, ramming to stop them.
- * The game assigns each patrol car a role: 'chase' tails the player, 'block'
- * cuts ahead of their velocity and parks across the escape route, and the cars
- * spread out instead of piling onto the same bumper. */
-export function stepPolice(car, dt, city, target, cars, role = 'chase', grip = 1) {
-  const d = dist(car.x, car.y, target.x, target.y);
-  let tx = target.x;
-  let ty = target.y;
-  if (role === 'block') {
-    // Aim ahead of where the player is heading, not where they are.
-    const tvx = Math.cos(target.angle || 0) * (target.speed || 0);
-    const tvy = Math.sin(target.angle || 0) * (target.speed || 0);
-    tx = target.x + tvx * POLICE.blockAhead;
-    ty = target.y + tvy * POLICE.blockAhead;
+export function spawnTraffic(G, n) {
+  for (let i = 0; i < n; i++) {
+    const s = G.world.carSpawns[Math.floor(G.rng() * G.world.carSpawns.length)];
+    if (s.bike) continue;
+    const model = CAR_MODELS[Math.floor(G.rng() * (CAR_MODELS.length - 1))];
+    const v = makeVehicle(model, s.x + (G.rng() - 0.5) * 30, s.y + (G.rng() - 0.5) * 30, G.rng() * Math.PI * 2, 'traffic');
+    v.speed = model.top * 0.45;
+    G.vehicles.push(v);
   }
-  const wantAngle = Math.atan2(ty - car.y, tx - car.x);
-  const dAngle = angleDelta(car.angle, wantAngle);
-  const steer = clamp(dAngle * 2.6, -1, 1);
-  const arriveD = role === 'block' ? Math.hypot(tx - car.x, ty - car.y) : d;
-  const throttle = arriveD > 60 ? 1 : 0.4;
-  const hit = stepCar(car, dt, { throttle, steer, brake: arriveD < 40 }, city, grip);
-  if (hit && d < 120) car.speed *= 0.8;
-  // Police push other traffic aside by slowing near them.
-  for (const other of cars) {
-    if (other === car || other.driver !== 'traffic') continue;
-    if (dist(car.x, car.y, other.x, other.y) < 90) other.wait = Math.max(other.wait, 0.5);
-  }
-  // Spread out: a patrol car eases off when another patrol car is on its bumper.
-  for (const other of cars) {
-    if (other === car || other.driver !== 'police' || other.dead) continue;
-    const od = dist(car.x, car.y, other.x, other.y);
-    if (od < 70 && od > 0.01) {
-      const push = (70 - od) / 70;
-      car.x += ((car.x - other.x) / od) * push * 20 * dt;
-      car.y += ((car.y - other.y) / od) * push * 20 * dt;
+}
+
+export function spawnPolice(G) {
+  const p = G.player;
+  const model = CAR_MODELS[CAR_MODELS.length - 1];
+  const ang = G.rng() * Math.PI * 2;
+  const d = 700 + G.rng() * 300;
+  const x = clamp(p.x + Math.cos(ang) * d, 60, WORLD.w - 60);
+  const y = clamp(p.y + Math.sin(ang) * d, 60, WORLD.h - 60);
+  const v = makeVehicle(model, x, y, angleTo(x, y, p.x, p.y), 'police');
+  v.speed = model.top * 0.6;
+  G.vehicles.push(v);
+  return v;
+}
+
+function drivePhysics(G, v, dt, throttle, steer) {
+  const grip = WEATHER_KINDS[G.weather].grip * v.model.grip;
+  const accel = v.model.accel * throttle * (throttle < 0 ? 0.6 : 1);
+  v.speed = clamp(v.speed + accel * dt, -v.model.top * 0.35, v.model.top);
+  // Drag and grip.
+  v.speed -= v.speed * (v.model.bike ? 0.25 : 0.4) * dt;
+  if (Math.abs(v.speed) < 4 && throttle === 0) v.speed = 0;
+  const turnRate = (v.model.bike ? 2.6 : 2.1) * grip * clamp(Math.abs(v.speed) / 160, 0.25, 1);
+  v.angle += steer * turnRate * dt * (v.speed >= 0 ? 1 : -1);
+  // Bike wobble at top speed.
+  if (v.model.bike) {
+    const ratio = Math.abs(v.speed) / v.model.top;
+    v.wobble = ratio > 0.75 ? Math.sin(G.time * 14) * (ratio - 0.75) * 0.9 : 0;
+    v.angle += v.wobble * dt;
+    if (ratio > 0.92 && G.rng() < dt * 0.4) {
+      // Hard crash risk: damage and a speed cut.
+      v.speed *= 0.55;
+      v.health -= 6;
+      G.particles.push({ x: v.x, y: v.y, kind: 'spark', t: 0.4, max: 0.4 });
     }
   }
-  return d;
+  const nx = v.x + Math.cos(v.angle) * v.speed * dt;
+  const ny = v.y + Math.sin(v.angle) * v.speed * dt;
+  if (!circleHitsBuilding(G.world, nx, ny, 16)) {
+    v.x = nx; v.y = ny;
+  } else {
+    v.speed *= -0.25;
+    v.health -= 2;
+    G.particles.push({ x: v.x, y: v.y, kind: 'spark', t: 0.3, max: 0.3 });
+  }
+  const c = clampToWorld(v.x, v.y, 20);
+  v.x = c.x; v.y = c.y;
 }
 
-/** Gang chase car: like police but tries to stay beside the player and shoot. */
-export function stepGangCar(car, dt, city, target, grip = 1) {
-  const d = dist(car.x, car.y, target.x, target.y);
-  const side = car.id % 2 === 0 ? 1 : -1;
-  const tx = target.x + Math.cos((target.angle ?? 0) + side * 1.2) * 90;
-  const ty = target.y + Math.sin((target.angle ?? 0) + side * 1.2) * 90;
-  const wantAngle = Math.atan2(ty - car.y, tx - car.x);
-  const dAngle = angleDelta(car.angle, wantAngle);
-  const steer = clamp(dAngle * 2.6, -1, 1);
-  stepCar(car, dt, { throttle: d > 120 ? 1 : 0.55, steer, brake: false }, city, grip);
-  return d;
+function trafficSteer(G, v, dt) {
+  // Follow the road: steer toward the nearest avenue/street direction.
+  let best = null, bestD = Infinity;
+  for (const r of G.world.roads) {
+    const d = r.vertical ? Math.abs(v.x - r.x1) : Math.abs(v.y - r.y1);
+    if (d < bestD) { bestD = d; best = r; }
+  }
+  let targetAngle = v.angle;
+  if (best) {
+    if (best.vertical) targetAngle = v.y < WORLD.h / 2 ? Math.PI / 2 : -Math.PI / 2;
+    else targetAngle = v.x < WORLD.w / 2 ? 0 : Math.PI;
+    // Keep to the right-hand lane.
+    if (best.vertical) v.x += (best.x1 + 20 - v.x) * 0.5 * dt;
+    else v.y += (best.y1 + 16 - v.y) * 0.5 * dt;
+  }
+  const diff = angleDiff(v.angle, targetAngle);
+  const steer = clamp(diff * 2, -1, 1);
+  // Slow for cars ahead.
+  let throttle = 0.6;
+  for (const o of G.vehicles) {
+    if (o === v) continue;
+    if (dist2(v.x, v.y, o.x, o.y) < 90 * 90 && Math.abs(angleDiff(v.angle, angleTo(v.x, v.y, o.x, o.y))) < 0.6) {
+      throttle = 0.15;
+    }
+  }
+  drivePhysics(G, v, dt, throttle, steer);
 }
 
-/** Simple circle collision between two cars; pushes them apart and damages both. */
-export function collideCars(a, b) {
-  const ma = CAR.models[a.model];
-  const mb = CAR.models[b.model];
-  const ra = Math.max(ma.w, ma.h) / 2 - 4;
-  const rb = Math.max(mb.w, mb.h) / 2 - 4;
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
+function policeSteer(G, v, dt) {
+  const p = G.player;
+  const pv = p.vehicle;
+  const px = pv ? pv.x : p.x;
+  const py = pv ? pv.y : p.y;
+  const pvx = pv ? Math.cos(pv.angle) * pv.speed : p.vx;
+  const pvy = pv ? Math.sin(pv.angle) * pv.speed : p.vy;
+  let tx = px, ty = py;
+  if (v.role === 'block') {
+    // Cut ahead of the player's velocity vector.
+    tx = px + pvx * 1.4;
+    ty = py + pvy * 1.4;
+  }
+  const want = angleTo(v.x, v.y, tx, ty);
+  const diff = angleDiff(v.angle, want);
+  const steer = clamp(diff * 2.4, -1, 1);
+  const throttle = Math.abs(diff) > 1.4 ? 0.3 : 1;
+  drivePhysics(G, v, dt, throttle, steer);
+  v.siren += dt;
+  // Ram the player when close.
+  const d2 = dist2(v.x, v.y, px, py);
+  if (d2 < 46 * 46) {
+    if (pv) { pv.health -= 14 * dt; pv.speed *= 0.92; }
+    else { G.player.hp -= 10 * dt; }
+    G.particles.push({ x: px, y: py, kind: 'spark', t: 0.25, max: 0.25 });
+  }
+}
+
+export function assignPoliceRoles(G) {
+  const cops = G.vehicles.filter((v) => v.driver === 'police');
+  if (!cops.length) return;
+  const p = G.player;
+  const px = p.vehicle ? p.vehicle.x : p.x;
+  const py = p.vehicle ? p.vehicle.y : p.y;
+  cops.sort((a, b) => dist2(a.x, a.y, px, py) - dist2(b.x, b.y, px, py));
+  cops[0].role = 'chase';
+  for (let i = 1; i < cops.length; i++) cops[i].role = G.wanted >= 2 ? 'block' : 'chase';
+}
+
+export function updateVehicles(G, dt) {
+  for (const v of G.vehicles) {
+    if (v.driver === 'player') {
+      const grip = WEATHER_KINDS[G.weather].grip;
+      let throttle = 0, steer = 0;
+      if (G.input.up) throttle = 1;
+      if (G.input.downKey) throttle = -1;
+      if (G.input.left) steer = -1;
+      if (G.input.right) steer = 1;
+      drivePhysics(G, v, dt, throttle, steer);
+      if (v.health <= 0) {
+        // Wreck: player is thrown out, car burns.
+        exitVehicle(G, true);
+        v.driver = 'wreck';
+        G.particles.push({ x: v.x, y: v.y, kind: 'smoke', t: 2, max: 2 });
+      }
+    } else if (v.driver === 'traffic') {
+      trafficSteer(G, v, dt);
+    } else if (v.driver === 'police') {
+      policeSteer(G, v, dt);
+    }
+  }
+  // Remove wrecks far away after a while.
+  G.vehicles = G.vehicles.filter((v) => v.driver !== 'wreck' || dist2(v.x, v.y, G.player.x, G.player.y) < 1400 * 1400);
+}
+
+export function nearestVehicle(G, x, y, maxD) {
+  let best = null, bestD = maxD * maxD;
+  for (const v of G.vehicles) {
+    if (v.driver === 'player' || v.driver === 'wreck') continue;
+    const d = dist2(x, y, v.x, v.y);
+    if (d < bestD) { bestD = d; best = v; }
+  }
+  return best;
+}
+
+export function enterVehicle(G, v) {
+  const p = G.player;
+  if (v.driver === 'traffic') {
+    // Carjacking: the driver flees on foot, wanted rises.
+    addWanted(G, 1);
+    G.peds.push({ x: v.x + 30, y: v.y + 30, angle: 0, speed: 130, kind: 'flee', state: 'flee', t: 0, hp: 100 });
+    G.hudMsg = 'Car stolen! The police noticed.';
+    G.hudMsgT = 3;
+  }
+  v.driver = 'player';
+  p.vehicle = v;
+  p.onFoot = false;
+  p.x = v.x; p.y = v.y;
+}
+
+export function exitVehicle(G, wrecked) {
+  const p = G.player;
+  const v = p.vehicle;
+  if (!v) return;
+  v.driver = wrecked ? 'wreck' : 'parked';
+  v.speed = wrecked ? 0 : v.speed * 0.3;
+  p.vehicle = null;
+  p.onFoot = true;
+  p.x = v.x + Math.cos(v.angle + Math.PI / 2) * 34;
+  p.y = v.y + Math.sin(v.angle + Math.PI / 2) * 34;
+  p.vx = 0; p.vy = 0;
+}
+
+export function addWanted(G, n) {
+  G.wanted = clamp(G.wanted + n, 0, 5);
+  G.wantedTimer = 0;
+  // Keep police numbers in step with the wanted level.
+  const cops = G.vehicles.filter((v) => v.driver === 'police').length;
+  const want = G.wanted === 0 ? 0 : Math.min(1 + G.wanted, 5);
+  for (let i = cops; i < want; i++) spawnPolice(G);
+  assignPoliceRoles(G);
+}
+
+export function decayWanted(G, dt) {
+  if (G.wanted === 0) return;
+  const p = G.player;
+  const px = p.vehicle ? p.vehicle.x : p.x;
+  const py = p.vehicle ? p.vehicle.y : p.y;
+  const sight = WEATHER_KINDS[G.weather].sight;
+  let seen = false;
+  for (const v of G.vehicles) {
+    if (v.driver !== 'police') continue;
+    const d = Math.hypot(v.x - px, v.y - py);
+    if (d < sight && hasLineOfSight(G, v.x, v.y, px, py)) { seen = true; break; }
+  }
+  if (!seen) {
+    for (const c of G.cops) {
+      const d = Math.hypot(c.x - px, c.y - py);
+      if (d < sight * 0.7 && hasLineOfSight(G, c.x, c.y, px, py)) { seen = true; break; }
+    }
+  }
+  if (seen) { G.wantedTimer = 0; return; }
+  G.wantedTimer += dt;
+  if (G.wantedTimer > 14) {
+    G.wanted -= 1;
+    G.wantedTimer = 0;
+    if (G.wanted === 0) {
+      // Police give up and drive off.
+      G.vehicles = G.vehicles.filter((v) => v.driver !== 'police');
+    }
+  }
+}
+
+function hasLineOfSight(G, x1, y1, x2, y2) {
+  // Local alias so police logic does not import world twice.
+  const dx = x2 - x1, dy = y2 - y1;
   const d = Math.hypot(dx, dy);
-  const min = ra + rb - 18;
-  if (d > 0.01 && d < min) {
-    const push = (min - d) / 2;
-    const nx = dx / d;
-    const ny = dy / d;
-    a.x -= nx * push;
-    a.y -= ny * push;
-    b.x += nx * push;
-    b.y += ny * push;
-    const impact = Math.abs(a.speed - b.speed);
-    if (impact > 120) {
-      a.health -= impact * 0.02;
-      b.health -= impact * 0.02;
-      a.speed *= 0.7;
-      b.speed *= 0.7;
-      return true;
-    }
+  const steps = Math.max(1, Math.ceil(d / 40));
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    if (circleHitsBuilding(G.world, x1 + dx * t, y1 + dy * t, 2)) return false;
   }
-  return false;
+  return true;
 }
