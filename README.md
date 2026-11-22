@@ -3,7 +3,6 @@
 [![reward](https://make.fun/badge/gta6-01/dzatm/makefun-gta6-game/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 
 Built for the [make.fun Make GTA 6 bounty](https://make.fun/bounty/gta6-01).
-
 Referral code: `82nq3gxf` — https://make.fun/r/82nq3gxf
 
 # Solmarina: Streets of Gold
