@@ -1,58 +1,60 @@
 // Entry point for the make.fun "Make GTA 6" bounty.
 // Copies game/ and screenshots/ into the output directory and writes
-// dossier.json describing the entry. Run with:
+// dossier.json exactly as the kit's buildDossier writes it. Run with:
 //   MAKEFUN_OUTPUT_DIR=out node main.ts
 // (Node's built-in TypeScript type stripping runs this file directly.)
-import { cpSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync, readFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { buildDossier } from './vendor/makefun-game.ts';
 
-const OUT = process.env.MAKEFUN_OUTPUT_DIR || 'out';
+const OUT = resolve(process.env.MAKEFUN_OUTPUT_DIR || 'out');
 const ROOT = resolve(import.meta.dirname || '.');
 
-function listFiles(dir, base) {
-  const out = [];
+// The caps the bounty's scorer passes buildDossier from its gate.json
+// (see the header of vendor/makefun-game.ts): the text cap shapes the
+// dossier bytes, the other caps only refuse input past them.
+const CAPS = {
+  text_max_bytes: 163840,
+  screenshots: { max: 4, max_bytes: 262144 },
+  game_max_files: 993,
+  game_max_bytes: 50331648,
+  game_path_max_bytes: 1000,
+};
+
+// The most bytes game/ and screenshots/ may cost together: the gate's
+// dossier_matches row caps the hand-in at 1536 KiB.
+const HANDIN_MAX_BYTES = 1536 * 1024;
+
+/** The files' bytes under a directory, summed recursively. */
+function dirBytes(dir) {
+  let total = 0;
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
     const st = statSync(p);
-    if (st.isDirectory()) out.push(...listFiles(p, join(base, name)));
-    else out.push(join(base, name));
+    total += st.isDirectory() ? dirBytes(p) : st.size;
   }
-  return out;
+  return total;
 }
 
-async function main() {
+function main() {
   mkdirSync(OUT, { recursive: true });
-  const gameFiles = [];
   for (const src of ['game', 'screenshots']) {
     const srcPath = join(ROOT, src);
-    if (!existsSync(srcPath)) continue;
+    if (!existsSync(srcPath)) throw new Error(`missing ${src}/ in ${ROOT}`);
     cpSync(srcPath, join(OUT, src), { recursive: true });
-    gameFiles.push(...listFiles(srcPath, src));
   }
-
-  // The kit's vendored helper, when it exposes a dossier builder, is
-  // used for the dossier; otherwise a plain dossier is written.
-  let vendorDossier = null;
-  try {
-    const vendor = await import('./vendor/makefun-game.ts');
-    const fn = vendor.buildDossier || vendor.writeDossier || vendor.handIn || vendor.default;
-    if (typeof fn === 'function') {
-      vendorDossier = fn({ title: 'Solmarina: Streets of Gold', files: gameFiles, outDir: OUT });
-    }
-  } catch (e) {
-    vendorDossier = null;
+  // Fail loudly where the scorer would refuse, instead of handing in a
+  // dossier the gate rejects.
+  const handinBytes = dirBytes(join(OUT, 'game')) + dirBytes(join(OUT, 'screenshots'));
+  if (handinBytes > HANDIN_MAX_BYTES) {
+    throw new Error(`game/ + screenshots/ come to ${handinBytes} bytes, over the ${HANDIN_MAX_BYTES} the gate allows`);
   }
-
-  const dossier = vendorDossier || {
-    title: 'Solmarina: Streets of Gold',
-    description: 'An original top-down 2D open-world crime game in the spirit of GTA 6: a seeded coastal city, drivable cars and a motorcycle, a 0-5 star wanted system with coordinated police, five weapons, seven story missions, weather, day/night, economy, saves and photo mode. Vanilla Canvas/JS, fully offline.',
-    entrypoint: 'game/index.html',
-    files: gameFiles,
-    screenshots: ['screenshots/1-start.jpg', 'screenshots/2-drive.jpg', 'screenshots/3-chase.jpg', 'screenshots/4-mission.jpg'],
-    run: 'node serve.ts',
-  };
-  writeFileSync(join(OUT, 'dossier.json'), JSON.stringify(dossier, null, 2) + '\n');
-  console.log(`Handed in ${join(OUT, 'dossier.json')} (${gameFiles.length} files)`);
+  // buildDossier returns the dossier (makefun/dossier/v1) as canonical
+  // JSON bytes: write them exactly, with no reformatting and no fallback.
+  // If the input is past a cap it throws, and main.ts fails loudly.
+  const dossier = buildDossier(OUT, CAPS);
+  writeFileSync(join(OUT, 'dossier.json'), dossier);
+  console.log(`Handed in ${join(OUT, 'dossier.json')} (${dossier.length} bytes; game/ + screenshots/ ${handinBytes} bytes)`);
 }
 
-await main();
+main();
