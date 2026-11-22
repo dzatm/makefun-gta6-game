@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Solmarina: Streets of Gold — an original open-world crime game. Seven story missions, a drivable motorcycle, weather that changes the driving, police that coordinate, and a living coastal city. Playable offline in the browser.">
+<title>Solmarina: Streets of Gold</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1526; }
+  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #game:focus { outline: 2px solid #f5c518; outline-offset: -2px; }
+  /* Read aloud, never shown: the status line screen readers announce. */
+  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: #f4f6f8; font: 17px system-ui, sans-serif; background: #0d1526; z-index: 1; }
+</style>
+</head>
+<body>
+<canvas id="game" tabindex="0" aria-label="Solmarina: Streets of Gold — an open-world crime game. Drive cars and a motorcycle, explore the city on foot, take seven story missions, and stay ahead of the police through rain and fog."></canvas>
+<p id="loading">Loading Solmarina…</p>
+<noscript><p style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#f4f6f8;font:17px system-ui,sans-serif;background:#0d1526">Solmarina needs JavaScript to run — please enable it and reload.</p></noscript>
+<p id="status" role="status" aria-live="polite"></p>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
